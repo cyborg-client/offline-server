@@ -1,0 +1,6 @@
+[package]
+name = "ntnu_cyborg_server"
+version = "0.1.0"
+authors = ["Sondre Russvoll <sondre@russvoll.no>"]
+
+[dependencies]
