@@ -5,15 +5,19 @@ use futures::future::Future;
 use hyper::header::ContentLength;
 use hyper::server::{Http, Request, Response, Service};
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
 
-struct Settings {
+struct SettingsData {
     running: bool,
-    sample_rate: u16,
+    sample_rate: u32,
     segment_length: u32
 }
 
+type Settings = Arc<Mutex<SettingsData>>;
+
 struct HttpService {
-    settings: Arc<Settings>
+    settings: Settings
 }
 
 impl Service for HttpService {
@@ -24,28 +28,31 @@ impl Service for HttpService {
 
     fn call(&self, req: Self::Request) -> Self::Future {
         Box::new(futures::future::ok(
-            Response::new()
-                .with_header(ContentLength(10))
-                .with_body("Heisann :)")
+            Response::new().with_body("Heisann :)")
         ))
     }
 }
 
 fn main() {
     // Create shared Settings state.
-    let mut settings = Arc::new(Settings {
+    let mut settings = Arc::new(Mutex::new(SettingsData {
         running: false,
         sample_rate: 0,
         segment_length: 0
-    });
+    }));
+
+    // Create a thread handle vector on which to let main join:
+    let mut threads = Vec::new();
 
     // Create an HTTP-server listening for start and stop requests.
     // If already running, return error.
     // Else return OK immediately.
     let addr = "0.0.0.0:1234".parse().unwrap();
-
-    let http_server = Http::new().bind(&addr, move || Ok(HttpService { settings: settings.clone() })).unwrap();
-    http_server.run().unwrap();
+    let settings_clone = settings.clone();
+    threads.push(thread::spawn(move || {
+        let http_server = Http::new().bind(&addr, move || Ok(HttpService { settings: settings_clone.clone() })).unwrap();
+        http_server.run().unwrap();
+    }));
 
     // Create two client lists, waiting and receiving.
 
@@ -54,4 +61,9 @@ fn main() {
     // For each new segment, move clients to the list of receiving clients.
 
     // Start thread reading MEA data and sending it on all receiving clients.
+
+    // Finally join all server threads:
+    for i in threads {
+        i.join();
+    }
 }
