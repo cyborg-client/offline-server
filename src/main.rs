@@ -5,9 +5,8 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
-use futures::future::{Future, result, ok};
+use futures::future::{Future, ok};
 use hyper::{Method, StatusCode, Body};
-use hyper::header::{ContentLength};
 use hyper::server::{Http, Request, Response, Service};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -68,7 +67,8 @@ impl Service for HttpService {
                 ))
             },
             ("/start", &Method::Post) => {
-                Box::new(req.body().concat2().map(|b| {
+                let server_state = self.server_state.clone();
+                Box::new(req.body().concat2().map(move |b| {
                     let config: Config = if let Ok(n) = serde_json::from_slice(b.as_ref()) {
                         n
                     } else {
@@ -77,15 +77,40 @@ impl Service for HttpService {
                         return Response::new().with_status(StatusCode::BadRequest);
                     };
 
-                    println!("Start: {:?}", config);
+                    {
+                        let mut server_state = server_state.lock().unwrap();
 
-                    Response::new().with_body(Box::new(Body::from("Valid")) as ResponseStream)
+                        if server_state.running {
+                            println!("Error: Already running!");
+
+                            return Response::new()
+                                .with_status(StatusCode::Locked)
+                                .with_body(Box::new(Body::from("Server already started.")) as ResponseStream);
+                        }
+
+                        server_state.running = true;
+                        server_state.config = config;
+
+                        println!("Start: {:?}", server_state.config);
+                    }
+
+                    Response::new()
                 }))
             },
             ("/stop", &Method::Post) => {
-                Box::new(ok(Response::new().with_body(Box::new(
-                    Body::from("Stopped server.")
-                ) as ResponseStream)))
+                {
+                    let mut server_state = self.server_state.lock().unwrap();
+
+                    if server_state.running {
+                        println!("Stopped server.");
+                        server_state.running = false;
+                    } else {
+                        println!("Error: Can't stop stopped server.");
+                        return Box::new(ok(Response::new().with_status(StatusCode::BadRequest)));
+                    }
+                }
+
+                Box::new(ok(Response::new()))
             },
             _ => {
                 Box::new(ok(Response::new().with_status(StatusCode::NotFound)))
@@ -96,7 +121,7 @@ impl Service for HttpService {
 
 fn main() {
     // Create shared Settings state.
-    let mut server_state = Arc::new(Mutex::new(ServerStateData::new()));
+    let server_state = Arc::new(Mutex::new(ServerStateData::new()));
 
     // Create a thread handle vector on which to let main join:
     let mut threads = Vec::new();
