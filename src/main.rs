@@ -85,9 +85,8 @@ impl Service for HttpService {
 
                             return Response::new()
                                 .with_status(StatusCode::Locked)
-                                .with_body(Box::new(Body::from("Server already started.")) as ResponseStream);
+                                .with_body(Box::new(Body::from("Server already started.")) as ResponseStream)
                         }
-
                         server_state.running = true;
                         server_state.config = config;
 
@@ -110,7 +109,7 @@ impl Service for HttpService {
                     }
                 }
 
-                Box::new(ok(Response::new()))
+                Box::new(req.body().skip_while(|_| ok(true)).concat2().map(|_| Response::new()))
             },
             _ => {
                 Box::new(ok(Response::new().with_status(StatusCode::NotFound)))
