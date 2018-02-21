@@ -4,6 +4,8 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
+extern crate tokio;
+extern crate tokio_io;
 
 use futures::future::{Future, ok};
 use hyper::{Method, StatusCode, Body};
@@ -13,6 +15,10 @@ use std::sync::Mutex;
 use std::thread;
 use futures::Stream;
 use hyper::Chunk;
+use std::net::SocketAddr;
+use tokio_io::io::WriteHalf;
+use tokio::net::TcpStream;
+use tokio::net::TcpListener;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -53,8 +59,8 @@ pub type ResponseStream = Box<Stream<Item=Chunk, Error=hyper::Error>>;
 
 impl Service for HttpService {
     type Request = Request;
-    type Error = hyper::Error;
     type Response = Response<ResponseStream>;
+    type Error = hyper::Error;
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
@@ -118,6 +124,32 @@ impl Service for HttpService {
     }
 }
 
+
+struct TcpServer {
+    waiting: Arc<Mutex<Vec<WriteHalf<TcpStream>>>>,
+    receiving: Arc<Mutex<Vec<WriteHalf<TcpStream>>>>,
+    listener: TcpListener
+}
+
+impl TcpServer {
+    fn bind(addr: &SocketAddr) -> TcpServer {
+        let listener = TcpListener::bind(addr)?;
+
+        TcpServer {
+            waiting: Arc::new(Mutex::new(Vec::new())),
+            receiving: Arc::new(Mutex::new(Vec::new())),
+            listener
+        }
+    }
+
+    fn accept_connections(&self) -> Result<bool> {
+        let waiting_clone = self.waiting.clone();
+        self.listener.incoming().for_each(move |socket| {
+
+        })
+    }
+}
+
 fn main() {
     // Create shared Settings state.
     let server_state = Arc::new(Mutex::new(ServerStateData::new()));
@@ -128,18 +160,24 @@ fn main() {
     // Create an HTTP-server listening for start and stop requests.
     // If already running, return error.
     // Else return OK immediately.
-    let addr = "0.0.0.0:1234".parse().unwrap();
+    let http_addr = "0.0.0.0:1234".parse().unwrap();
     let server_state_clone = server_state.clone();
     threads.push(thread::spawn(move || {
-        let http_server = Http::new().bind(&addr, move || Ok(HttpService { server_state: server_state_clone.clone() })).unwrap();
+        let http_server = Http::new().bind(&http_addr, move || Ok(HttpService { server_state: server_state_clone.clone() })).unwrap();
         http_server.run().unwrap();
     }));
 
     // Create two client lists, waiting and receiving.
 
+
     // Create a TCP-server where all data will be sent.
     // When clients are connected, add them to a list of waiting clients.
     // For each new segment, move clients to the list of receiving clients.
+    let tcp_addr = "0.0.0.0:12345".parse().unwrap();
+    let listener = TcpListener::bind(&tcp_addr).unwrap();
+    threads.push(thread::spawn(move || {
+
+    }));
 
     // Start thread reading MEA data and sending it on all receiving clients.
 
