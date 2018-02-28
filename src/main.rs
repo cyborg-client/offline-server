@@ -17,10 +17,15 @@ use futures::Stream;
 use hyper::Chunk;
 use std::net::SocketAddr;
 use tokio_io::io::WriteHalf;
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::net::TcpListener;
+use tokio::net::Incoming;
 use std::io::Result;
 use tokio_io::AsyncRead;
+use std::borrow::Borrow;
+use tokio::executor::current_thread;
+use tokio_io::AsyncWrite;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -130,32 +135,74 @@ impl Service for HttpService {
 struct TcpServer {
     waiting: Arc<Mutex<Vec<WriteHalf<TcpStream>>>>,
     receiving: Arc<Mutex<Vec<WriteHalf<TcpStream>>>>,
-    listener: TcpListener
+    incoming: Incoming,
+    server_state: ServerState,
 }
 
 impl TcpServer {
-    fn bind(addr: &SocketAddr) -> Result<TcpServer> {
-        let listener = TcpListener::bind(addr)?;
+    fn bind(addr: &SocketAddr, server_state: ServerState) -> Result<TcpServer> {
+        let incoming = TcpListener::bind(addr)?.incoming();
 
         Ok(TcpServer {
             waiting: Arc::new(Mutex::new(Vec::new())),
             receiving: Arc::new(Mutex::new(Vec::new())),
-            listener
+            incoming,
+            server_state,
         })
     }
 
     fn run(self) -> Result<()> {
         let waiting_clone = self.waiting.clone();
-        self.listener.incoming().for_each(move |socket| {
+        let server = self.incoming.for_each(move |socket| {
             waiting_clone.lock().unwrap().push(socket.split().1);
             ok(())
+        }).map_err(|err| {
+            println!("accept error = {:?}", err);
         });
 
-        let thread = thread::spawn(move || {
-            while true {
+        let mut threads = Vec::new();
+        threads.push(thread::spawn(move || {
+            current_thread::run(|_| {
+                current_thread::spawn(server);
+            });
+        }));
+
+        let server_state = self.server_state.clone();
+        let receiving = self.receiving.clone();
+        let waiting_clone = self.waiting.clone();
+        threads.push(thread::spawn(move || {
+            loop {
+                let current_state;
+                {
+                    current_state = server_state.lock().unwrap();
+                }
+
+                if !current_state.running {
+                    let mut receiving = receiving.lock().unwrap();
+                    if (receiving.borrow() as &Vec<WriteHalf<TcpStream>>).len() != 0 {
+                        for mut stream in &mut receiving as &mut Vec<WriteHalf<TcpStream>> {
+                            stream.shutdown().unwrap();
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+
+                {
+                    let mut waiting = waiting_clone.lock().unwrap();
+                    let mut receiving = receiving.lock().unwrap();
+                    while waiting.len() != 0 {
+                        receiving.push(waiting.pop().unwrap());
+                    }
+                }
+
 
             }
-        });
+        }));
+
+        for thread in threads {
+            thread.join().unwrap();
+        }
 
         Ok(())
     }
@@ -185,7 +232,8 @@ fn main() {
     // When clients are connected, add them to a list of waiting clients.
     // For each new segment, move clients to the list of receiving clients.
     let tcp_addr = "0.0.0.0:12345".parse().unwrap();
-    let listener = TcpServer::bind(&tcp_addr).unwrap();
+    let server_state_clone = server_state.clone();
+    let listener = TcpServer::bind(&tcp_addr, server_state_clone).unwrap();
     threads.push(thread::spawn(move || {
         listener.run().unwrap()
     }));
