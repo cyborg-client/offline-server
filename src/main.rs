@@ -16,16 +16,16 @@ use std::thread;
 use futures::Stream;
 use hyper::Chunk;
 use std::net::SocketAddr;
-use tokio_io::io::WriteHalf;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::net::TcpListener;
 use tokio::net::Incoming;
 use std::io::Result;
 use tokio_io::AsyncRead;
-use std::borrow::Borrow;
+use std::ops::{DerefMut, Deref};
 use tokio::executor::current_thread;
 use tokio_io::AsyncWrite;
+use std::io::Write;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -91,7 +91,7 @@ impl Service for HttpService {
                     };
 
                     {
-                        let mut server_state = server_state.lock().unwrap();
+                        let mut server_state = server_state.lock().expect("ERROR");
 
                         if server_state.running {
                             println!("Error: Already running!");
@@ -111,7 +111,7 @@ impl Service for HttpService {
             },
             ("/stop", &Method::Post) => {
                 {
-                    let mut server_state = self.server_state.lock().unwrap();
+                    let mut server_state = self.server_state.lock().expect("ERROR");
 
                     if server_state.running {
                         println!("Stopped server.");
@@ -133,8 +133,8 @@ impl Service for HttpService {
 
 
 struct TcpServer {
-    waiting: Arc<Mutex<Vec<WriteHalf<TcpStream>>>>,
-    receiving: Arc<Mutex<Vec<WriteHalf<TcpStream>>>>,
+    waiting: Arc<Mutex<Vec<TcpStream>>>,
+    receiving: Arc<Mutex<Vec<TcpStream>>>,
     incoming: Incoming,
     server_state: ServerState,
 }
@@ -154,55 +154,77 @@ impl TcpServer {
     fn run(self) -> Result<()> {
         let waiting_clone = self.waiting.clone();
         let server = self.incoming.for_each(move |socket| {
-            waiting_clone.lock().unwrap().push(socket.split().1);
-            ok(())
+            waiting_clone.lock().expect("ERROR").push(socket);
+            Ok(())
         }).map_err(|err| {
             println!("accept error = {:?}", err);
         });
 
         let mut threads = Vec::new();
-        threads.push(thread::spawn(move || {
+        threads.push(thread::Builder::new().name("TCP socket acceptor".to_string()).spawn(move || {
             current_thread::run(|_| {
                 current_thread::spawn(server);
             });
-        }));
+        }).expect("ERROR"));
 
         let server_state = self.server_state.clone();
         let receiving = self.receiving.clone();
         let waiting_clone = self.waiting.clone();
-        threads.push(thread::spawn(move || {
+        threads.push(thread::Builder::new().name("TCP data sender".to_string()).spawn(move || {
             loop {
                 let current_state;
                 {
-                    current_state = server_state.lock().unwrap();
+                    current_state = server_state.lock().expect("ERROR");
                 }
 
                 if !current_state.running {
-                    let mut receiving = receiving.lock().unwrap();
-                    if (receiving.borrow() as &Vec<WriteHalf<TcpStream>>).len() != 0 {
-                        for mut stream in &mut receiving as &mut Vec<WriteHalf<TcpStream>> {
-                            stream.shutdown().unwrap();
-                        }
-                    }
+                    let mut receiving = receiving.lock().expect("ERROR");
+//                    if receiving.deref().len() != 0 {
+//                        for mut stream in receiving.deref_mut() {
+//                            stream.shutdown().expect("ERROR");
+//                        }
+//                    }
+                    receiving.clear();
+                    // TODO: Use Condvar instead.
                     thread::sleep(Duration::from_millis(1));
                     continue;
                 }
 
                 {
-                    let mut waiting = waiting_clone.lock().unwrap();
-                    let mut receiving = receiving.lock().unwrap();
+                    let mut waiting = waiting_clone.lock().expect("ERROR");
+                    let mut receiving = receiving.lock().expect("ERROR");
                     while waiting.len() != 0 {
-                        receiving.push(waiting.pop().unwrap());
+                        receiving.push(waiting.pop().expect("Couldn't pop from waiting list."));
                     }
+                }
+
+                let mut receiving = receiving.lock().expect("ERROR");
+                let mut close = Vec::new();
+                for (i, stream) in receiving.iter_mut().enumerate() {
+                    match stream.write(b"HeiHai") {
+                        Err(e) => {
+                            println!("Couldn't write: {}", e);
+                            close.push(i);
+                            continue;
+                        },
+                        _ => {}
+                    }
+                    //thread::sleep(Duration::from_millis(500));
+                }
+
+                for i in close.into_iter().rev() {
+                    receiving.remove(i);
                 }
 
 
             }
-        }));
+        }).expect("ERROR"));
 
         for thread in threads {
-            thread.join().unwrap();
+            thread.join().expect("ERROR");
         }
+
+        println!("Hmm");
 
         Ok(())
     }
@@ -218,11 +240,11 @@ fn main() {
     // Create an HTTP-server listening for start and stop requests.
     // If already running, return error.
     // Else return OK immediately.
-    let http_addr = "0.0.0.0:1234".parse().unwrap();
+    let http_addr = "0.0.0.0:1234".parse().expect("ERROR");
     let server_state_clone = server_state.clone();
     threads.push(thread::spawn(move || {
-        let http_server = Http::new().bind(&http_addr, move || Ok(HttpService { server_state: server_state_clone.clone() })).unwrap();
-        http_server.run().unwrap();
+        let http_server = Http::new().bind(&http_addr, move || Ok(HttpService { server_state: server_state_clone.clone() })).expect("ERROR");
+        http_server.run().expect("ERROR");
     }));
 
     // Create two client lists, waiting and receiving.
@@ -231,17 +253,19 @@ fn main() {
     // Create a TCP-server where all data will be sent.
     // When clients are connected, add them to a list of waiting clients.
     // For each new segment, move clients to the list of receiving clients.
-    let tcp_addr = "0.0.0.0:12345".parse().unwrap();
+    let tcp_addr = "0.0.0.0:12345".parse().expect("ERROR");
     let server_state_clone = server_state.clone();
-    let listener = TcpServer::bind(&tcp_addr, server_state_clone).unwrap();
+    let listener = TcpServer::bind(&tcp_addr, server_state_clone).expect("ERROR");
     threads.push(thread::spawn(move || {
-        listener.run().unwrap()
+        listener.run().expect("ERROR")
     }));
 
     // Start thread reading MEA data and sending it on all receiving clients.
 
     // Finally join all server threads:
     for i in threads {
-        i.join().unwrap();
+        i.join().expect("ERROR");
     }
+
+    println!("Hmm");
 }
