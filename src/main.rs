@@ -19,6 +19,8 @@ use std::net::SocketAddr;
 use tokio_io::io::WriteHalf;
 use tokio::net::TcpStream;
 use tokio::net::TcpListener;
+use std::io::Result;
+use tokio_io::AsyncRead;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -132,21 +134,30 @@ struct TcpServer {
 }
 
 impl TcpServer {
-    fn bind(addr: &SocketAddr) -> TcpServer {
+    fn bind(addr: &SocketAddr) -> Result<TcpServer> {
         let listener = TcpListener::bind(addr)?;
 
-        TcpServer {
+        Ok(TcpServer {
             waiting: Arc::new(Mutex::new(Vec::new())),
             receiving: Arc::new(Mutex::new(Vec::new())),
             listener
-        }
+        })
     }
 
-    fn accept_connections(&self) -> Result<bool> {
+    fn run(self) -> Result<()> {
         let waiting_clone = self.waiting.clone();
         self.listener.incoming().for_each(move |socket| {
+            waiting_clone.lock().unwrap().push(socket.split().1);
+            ok(())
+        });
 
-        })
+        let thread = thread::spawn(move || {
+            while true {
+
+            }
+        });
+
+        Ok(())
     }
 }
 
@@ -174,9 +185,9 @@ fn main() {
     // When clients are connected, add them to a list of waiting clients.
     // For each new segment, move clients to the list of receiving clients.
     let tcp_addr = "0.0.0.0:12345".parse().unwrap();
-    let listener = TcpListener::bind(&tcp_addr).unwrap();
+    let listener = TcpServer::bind(&tcp_addr).unwrap();
     threads.push(thread::spawn(move || {
-
+        listener.run().unwrap()
     }));
 
     // Start thread reading MEA data and sending it on all receiving clients.
