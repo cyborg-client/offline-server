@@ -6,6 +6,7 @@ extern crate serde_json;
 extern crate serde_derive;
 extern crate tokio;
 extern crate tokio_io;
+extern crate bytes;
 
 use futures::future::{Future, ok};
 use hyper::{Method, StatusCode, Body};
@@ -26,16 +27,27 @@ use tokio::executor::current_thread;
 use std::io::Cursor;
 use futures::sync::oneshot;
 use tokio_io::AsyncWrite;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::Cell;
 use tokio::executor::current_thread::{task_executor};
 use std::ops::Deref;
 use futures::future::Either;
+use bytes::Bytes;
 
 #[derive(Deserialize, Debug)]
 struct Config {
     sample_rate: u32,
     segment_length: u32
+}
+
+impl Config {
+    fn new() -> Config {
+        Config {
+            sample_rate: 0,
+            segment_length: 0,
+        }
+    }
 }
 
 type Running = bool;
@@ -45,9 +57,12 @@ enum Command {
     Stop
 }
 
+type CommandTx = std::sync::mpsc::Sender<(Command, oneshot::Sender<()>)>;
+type CommandRx = std::sync::mpsc::Receiver<(Command, oneshot::Sender<()>)>;
+
 struct HttpService {
-    running: Rc<Cell<bool>>,
-    command_tx: Rc<std::sync::mpsc::Sender<(Command, oneshot::Sender<()>)>>,
+    running: Rc<Cell<Running>>,
+    command_tx: Rc<CommandTx>,
 }
 
 pub type ResponseStream = Box<Stream<Item=Chunk, Error=hyper::Error>>;
@@ -91,11 +106,17 @@ impl Service for HttpService {
                     println!("Start: {:?}", config);
 
                     let (reply_tx, reply_rx) = oneshot::channel();
-                    command_tx.deref().send((Command::Start(config), reply_tx));
+                    command_tx.deref().send((Command::Start(config), reply_tx)).unwrap();
 
-                    Either::B(reply_rx.then(|_| {
-                        ok(Response::new())
-                    }))
+                    Either::B(
+                        reply_rx
+                            .and_then(|_| {
+                                ok(Response::new())
+                            })
+                            .or_else(|_| {
+                                ok(Response::new().with_status(StatusCode::InternalServerError))
+                            })
+                    )
                 }))
             },
             ("/stop", &Method::Post) => {
@@ -120,6 +141,36 @@ impl Service for HttpService {
     }
 }
 
+type ClientTx = futures::sync::mpsc::Sender<Bytes>;
+type ClientRx = futures::sync::mpsc::Sender<Bytes>;
+
+struct Controller {
+    command_rx: CommandRx,
+    clients: Arc<Mutex<HashMap<SocketAddr, ClientTx>>>,
+}
+
+impl Controller {
+    fn run(self) {
+        let mut config = None;
+
+        loop {
+            if let Ok((command, reply_tx)) = self.command_rx.try_recv() {
+                match command {
+                    Command::Start(c) => {
+                        config = Some(c);
+                    },
+                    Command::Stop => {
+                        config = None;
+                        self.clients.lock().unwrap().clear();
+                    }
+                }
+
+                reply_tx.send(()).unwrap();
+            }
+        }
+    }
+}
+
 
 fn main() {
     // Create a thread handle vector on which to let main join:
@@ -138,6 +189,19 @@ fn main() {
         let http_server = Http::new().bind(&http_addr, move || Ok(HttpService { running: running.clone(), command_tx: command_tx.clone() })).unwrap();
         http_server.run().unwrap();
     }));
+
+
+    let clients = Arc::new(Mutex::new(HashMap::new()));
+    let clients_clone = clients.clone();
+    threads.push(thread::spawn(move || {
+        let controller = Controller {
+            command_rx,
+            clients: clients_clone,
+        };
+
+        controller.run();
+    }));
+
 
     // Create two client lists, waiting and receiving.
 
