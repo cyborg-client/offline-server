@@ -33,6 +33,7 @@ use std::cell::Cell;
 use tokio::executor::current_thread::{task_executor};
 use std::ops::Deref;
 use futures::future::Either;
+use tokio_io::io::write_all;
 use bytes::Bytes;
 
 #[derive(Deserialize, Debug)]
@@ -121,16 +122,30 @@ impl Service for HttpService {
             },
             ("/stop", &Method::Post) => {
                 let mut running = self.running.clone();
-                Box::new(req.body().skip_while(|_| ok(true)).concat2().map(move |_| {
+                let command_tx = self.command_tx.clone();
+                Box::new(req.body().skip_while(|_| ok(true)).concat2().and_then(move |_| {
                     if running.get() {
                         running.set(false);
                         println!("Stopped server.");
-                        Response::new()
+                        let (reply_tx, reply_rx) = oneshot::channel();
+                        command_tx.deref().send((Command::Stop, reply_tx)).unwrap();
+
+                        Either::A(
+                            reply_rx
+                                .and_then(|_| {
+                                    ok(Response::new())
+                                })
+                                .or_else(|_| {
+                                    ok(Response::new().with_status(StatusCode::InternalServerError))
+                                })
+                        )
                     } else {
                         println!("Error: Can't stop stopped server.");
-                        Response::new()
-                            .with_status(StatusCode::Locked)
-                            .with_body("Server already stopped.")
+                        Either::B(ok(
+                            Response::new()
+                                .with_status(StatusCode::Locked)
+                                .with_body("Server already stopped.")
+                        ))
                     }
                 }))
             },
@@ -144,30 +159,124 @@ impl Service for HttpService {
 type ClientTx = futures::sync::mpsc::Sender<Bytes>;
 type ClientRx = futures::sync::mpsc::Sender<Bytes>;
 
+type Clients = Arc<Mutex<HashMap<SocketAddr, ClientTx>>>;
+
 struct Controller {
     command_rx: CommandRx,
-    clients: Arc<Mutex<HashMap<SocketAddr, ClientTx>>>,
+    clients: Clients,
+    config: Option<Config>,
 }
 
 impl Controller {
-    fn run(self) {
-        let mut config = None;
+    fn new(command_rx: CommandRx, clients: Clients) -> Controller {
+        Controller {
+            command_rx,
+            clients,
+            config: None,
+        }
+    }
 
+    fn update_config(&mut self) {
         loop {
-            if let Ok((command, reply_tx)) = self.command_rx.try_recv() {
-                match command {
-                    Command::Start(c) => {
-                        config = Some(c);
-                    },
-                    Command::Stop => {
-                        config = None;
-                        self.clients.lock().unwrap().clear();
+            let (mut command, mut reply_tx) = (None, None);
+            match self.config {
+                None => {
+                    if let Ok((a, b)) = self.command_rx.recv() {
+                        command = Some(a);
+                        reply_tx = Some(b);
+                    }
+                },
+                Some(_) => {
+                    if let Ok((a, b)) = self.command_rx.try_recv() {
+                        command = Some(a);
+                        reply_tx = Some(b);
+                    } else {
+                        return;
                     }
                 }
+            }
 
-                reply_tx.send(()).unwrap();
+            match command.unwrap() {
+                Command::Start(config) => {
+                    self.config = Some(config);
+                    reply_tx.unwrap().send(()).unwrap();
+                    return;
+                },
+                Command::Stop => {
+                    self.config = None;
+                    self.clients.lock().unwrap().clear();
+                    reply_tx.unwrap().send(()).unwrap();
+                }
             }
         }
+    }
+
+    fn collect_segment(&self) -> Bytes {
+        thread::sleep(Duration::from_millis(1));
+        Bytes::from("Hei")
+    }
+
+    fn run(mut self) {
+        loop {
+            self.update_config();
+
+            let segment = self.collect_segment();
+
+            let mut broken_clients = Vec::new();
+            let mut clients = self.clients.lock().unwrap();
+            for (address, tx) in clients.iter_mut() {
+                if let Err(_) = tx.try_send(segment.clone()) {
+                    broken_clients.push(address.clone());
+                }
+            }
+
+            for i in broken_clients.iter().rev() {
+                clients.remove(i);
+            }
+        }
+    }
+}
+
+struct TcpServer {
+    clients: Clients,
+    listener: TcpListener,
+}
+
+impl TcpServer {
+    fn bind(addr: &SocketAddr) -> TcpServer {
+        TcpServer {
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            listener: TcpListener::bind(addr).unwrap(),
+        }
+    }
+
+    fn get_clients(&self) -> Clients {
+        self.clients.clone()
+    }
+
+    fn run(self) {
+        let clients = self.clients.clone();
+        let server = self.listener.incoming().for_each(move |stream| {
+            let (tx, rx) = futures::sync::mpsc::channel(100);
+
+            {
+                clients.lock().unwrap().insert(stream.peer_addr().unwrap(), tx);
+            }
+
+            let writer = rx.fold(stream, |stream, msg| {
+                write_all(stream, msg)
+                    .map(|(stream, _)| stream)
+                    .map_err(|_| ())
+            }).map(|_| ());
+
+            current_thread::spawn(writer);
+
+            Ok(())
+        }).map_err(|_| ());
+
+        current_thread::run(|_| {
+            current_thread::spawn(server);
+        });
     }
 }
 
@@ -191,15 +300,16 @@ fn main() {
     }));
 
 
-    let clients = Arc::new(Mutex::new(HashMap::new()));
-    let clients_clone = clients.clone();
+    let tcp_addr = "0.0.0.0:12345".parse().unwrap();
+    let tcp_server = TcpServer::bind(&tcp_addr);
+    let clients = tcp_server.get_clients();
     threads.push(thread::spawn(move || {
-        let controller = Controller {
-            command_rx,
-            clients: clients_clone,
-        };
-
+        let controller = Controller::new(command_rx, clients);
         controller.run();
+    }));
+
+    threads.push(thread::spawn(move || {
+        tcp_server.run();
     }));
 
 
