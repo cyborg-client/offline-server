@@ -157,7 +157,6 @@ impl Service for HttpService {
 }
 
 type ClientTx = futures::sync::mpsc::Sender<Bytes>;
-type ClientRx = futures::sync::mpsc::Sender<Bytes>;
 
 type Clients = Arc<Mutex<HashMap<SocketAddr, ClientTx>>>;
 
