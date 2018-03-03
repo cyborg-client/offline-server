@@ -1,5 +1,7 @@
+#![feature(duration_from_micros)]
 extern crate hyper;
 extern crate futures;
+extern crate csv;
 extern crate serde;
 extern crate serde_json;
 #[macro_use]
@@ -17,7 +19,6 @@ use std::thread;
 use futures::Stream;
 use hyper::Chunk;
 use std::net::SocketAddr;
-use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::net::TcpListener;
 use tokio::net::Incoming;
@@ -34,7 +35,11 @@ use tokio::executor::current_thread::{task_executor};
 use std::ops::Deref;
 use futures::future::Either;
 use tokio_io::io::write_all;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use csv::{Reader, ReaderBuilder, Position};
+use std::fs;
+use std::time::Duration;
+use std::time::Instant;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -45,8 +50,8 @@ struct Config {
 impl Config {
     fn new() -> Config {
         Config {
-            sample_rate: 0,
-            segment_length: 0,
+            sample_rate: 10000,
+            segment_length: 1,
         }
     }
 }
@@ -92,6 +97,10 @@ impl Service for HttpService {
 
                         return Either::A(ok(Response::new().with_status(StatusCode::BadRequest)));
                     };
+
+                    if config.sample_rate != 10000 {
+                        return Either::A(ok(Response::new().with_status(StatusCode::NotImplemented)));
+                    }
 
                     if running.get() {
                         println!("Error: Already running!");
@@ -160,18 +169,30 @@ type ClientTx = futures::sync::mpsc::Sender<Bytes>;
 
 type Clients = Arc<Mutex<HashMap<SocketAddr, ClientTx>>>;
 
+#[derive(Deserialize)]
+struct Sample {
+    timestamp: u64,
+    values: Vec<i32>,
+}
+
 struct Controller {
     command_rx: CommandRx,
     clients: Clients,
     config: Option<Config>,
+    reader: Reader<fs::File>,
+    last_segment_finished: Instant,
 }
 
 impl Controller {
-    fn new(command_rx: CommandRx, clients: Clients) -> Controller {
+    fn new(command_rx: CommandRx, clients: Clients, filename: String) -> Controller {
+        let reader = ReaderBuilder::new().has_headers(false).from_path(filename).unwrap();
+        let reader_pos = reader.position().clone();
         Controller {
             command_rx,
             clients,
             config: None,
+            reader,
+            last_segment_finished: Instant::now(),
         }
     }
 
@@ -210,9 +231,41 @@ impl Controller {
         }
     }
 
-    fn collect_segment(&self) -> Bytes {
-        thread::sleep(Duration::from_millis(1));
-        Bytes::from("Hei")
+    fn sleep_until(&self, instant: Instant) {
+        let now = Instant::now();
+        if instant > now {
+            thread::sleep(instant - now);
+        }
+    }
+
+    fn collect_segment(&mut self) -> Bytes {
+        let config = if let Some(ref config) = self.config {
+            config
+        } else {
+            panic!("Config not set.");
+        };
+
+        let result = {
+            let mut iter = self.reader.deserialize();
+            iter
+                .take(config.segment_length as usize)
+                .fold(vec![BytesMut::new(); 60], |mut res, elem| {
+                    let sample: Sample = elem.unwrap();
+                    for (i, value) in sample.values.iter().enumerate() {
+                        res[i].extend_from_slice(format!("{}", value).as_bytes());
+                    }
+                    res
+                }).iter()
+                .fold(BytesMut::new(), |mut res, elem| {
+                    res.extend_from_slice(elem);
+                    res
+                }).freeze()
+        };
+
+
+        self.last_segment_finished += Duration::from_micros((config.segment_length * 1000000 / config.sample_rate) as u64);
+        self.sleep_until(self.last_segment_finished);
+        result
     }
 
     fn run(mut self) {
@@ -287,6 +340,9 @@ fn main() {
     // Create channels for communication between HTTP server and MEA read thread:
     let (command_tx, command_rx) = std::sync::mpsc::channel();
 
+    let (a, b) = futures::sync::oneshot::channel();
+    command_tx.send((Command::Start(Config::new()), a));
+
     // Create an HTTP-server listening for start and stop requests.
     // If already running, return error.
     // Else return OK immediately.
@@ -303,7 +359,7 @@ fn main() {
     let tcp_server = TcpServer::bind(&tcp_addr);
     let clients = tcp_server.get_clients();
     threads.push(thread::spawn(move || {
-        let controller = Controller::new(command_rx, clients);
+        let controller = Controller::new(command_rx, clients, "/home/sondre/ntnu_cyborg_server/data.csv".to_string());
         controller.run();
     }));
 
