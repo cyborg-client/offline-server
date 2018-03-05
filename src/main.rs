@@ -9,6 +9,7 @@ extern crate serde_derive;
 extern crate tokio;
 extern crate tokio_io;
 extern crate bytes;
+extern crate byteorder;
 
 use futures::future::{Future, ok};
 use hyper::{Method, StatusCode, Body};
@@ -40,6 +41,9 @@ use csv::{Reader, ReaderBuilder, Position};
 use std::fs;
 use std::time::Duration;
 use std::time::Instant;
+use byteorder::{ByteOrder, BigEndian};
+use std::ops::DerefMut;
+use bytes::BufMut;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -219,6 +223,7 @@ impl Controller {
             match command.unwrap() {
                 Command::Start(config) => {
                     self.config = Some(config);
+                    self.last_segment_finished = Instant::now();
                     reply_tx.unwrap().send(()).unwrap();
                     return;
                 },
@@ -252,7 +257,9 @@ impl Controller {
                 .fold(vec![BytesMut::new(); 60], |mut res, elem| {
                     let sample: Sample = elem.unwrap();
                     for (i, value) in sample.values.iter().enumerate() {
-                        res[i].extend_from_slice(format!("{}", value).as_bytes());
+                        let mut network_bytes = [0; std::mem::size_of::<i32>()];
+                        BigEndian::write_i32(&mut network_bytes, value.clone());
+                        res[i].extend_from_slice(&network_bytes);
                     }
                     res
                 }).iter()
@@ -340,8 +347,8 @@ fn main() {
     // Create channels for communication between HTTP server and MEA read thread:
     let (command_tx, command_rx) = std::sync::mpsc::channel();
 
-    let (a, b) = futures::sync::oneshot::channel();
-    command_tx.send((Command::Start(Config::new()), a));
+//    let (a, b) = futures::sync::oneshot::channel();
+//    command_tx.send((Command::Start(Config::new()), a));
 
     // Create an HTTP-server listening for start and stop requests.
     // If already running, return error.
