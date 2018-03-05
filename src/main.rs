@@ -1,66 +1,44 @@
 #![feature(duration_from_micros)]
-extern crate hyper;
-extern crate futures;
+extern crate byteorder;
+extern crate bytes;
 extern crate csv;
+extern crate futures;
+extern crate hyper;
 extern crate serde;
-extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde_json;
 extern crate tokio;
 extern crate tokio_io;
-extern crate bytes;
-extern crate byteorder;
 
-use futures::future::{Future, ok};
-use hyper::{Method, StatusCode, Body};
-use hyper::server::{Http, Request, Response, Service};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::thread;
+use byteorder::{BigEndian, ByteOrder};
+use bytes::{BufMut, Bytes, BytesMut};
+use csv::ReaderBuilder;
+use futures::future::{Either, Future, ok};
 use futures::Stream;
-use hyper::Chunk;
-use std::net::SocketAddr;
-use tokio::net::TcpStream;
-use tokio::net::TcpListener;
-use tokio::net::Incoming;
-use std::io::Result;
-use std::string::ToString;
-use tokio::executor::current_thread;
-use std::io::Cursor;
 use futures::sync::oneshot;
-use tokio_io::AsyncWrite;
-use std::collections::HashMap;
-use std::rc::Rc;
+use hyper::{Chunk, Method, StatusCode};
+use hyper::server::{Http, Request, Response, Service};
 use std::cell::Cell;
-use tokio::executor::current_thread::{task_executor};
-use std::ops::Deref;
-use futures::future::Either;
-use tokio_io::io::write_all;
-use bytes::{Bytes, BytesMut};
-use csv::{Reader, ReaderBuilder, Position};
+use std::collections::HashMap;
 use std::fs;
-use std::time::Duration;
-use std::time::Instant;
-use byteorder::{ByteOrder, BigEndian};
-use std::ops::DerefMut;
-use bytes::BufMut;
-use std::io::prelude::*;
 use std::io;
+use std::io::prelude::*;
 use std::io::SeekFrom;
+use std::net::SocketAddr;
+use std::ops::Deref;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+use tokio::executor::current_thread;
+use tokio::net::TcpListener;
+use tokio_io::io::write_all;
 
 #[derive(Deserialize, Debug)]
 struct Config {
     sample_rate: u32,
     segment_length: u32
-}
-
-impl Config {
-    fn new() -> Config {
-        Config {
-            sample_rate: 10000,
-            segment_length: 1,
-        }
-    }
 }
 
 type Running = bool;
@@ -178,6 +156,7 @@ type Clients = Arc<Mutex<HashMap<SocketAddr, ClientTx>>>;
 
 #[derive(Deserialize)]
 struct Sample {
+    #[allow(unused)]
     timestamp: u64,
     values: Vec<i32>,
 }
@@ -379,7 +358,17 @@ fn main() {
     let controller_input = match mode.as_str() {
         "cached" => None,
         "build" => Some(args.next().expect("No filename given.")),
-        _ => panic!("Invalid arguments."),
+        "clear" => {
+            for i in 0..60 {
+                let _ = fs::remove_file(format!(".{}.dat", i));
+            }
+
+            std::process::exit(0);
+        }
+        _ => {
+            eprintln!("Invalid arguments.");
+            std::process::exit(1);
+        },
     };
 
 
