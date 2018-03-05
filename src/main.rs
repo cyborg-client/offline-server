@@ -191,33 +191,47 @@ struct Controller {
 }
 
 impl Controller {
-    fn new(command_rx: CommandRx, clients: Clients, filename: String) -> Controller {
-        let mut reader = ReaderBuilder::new().has_headers(false).from_path(filename).unwrap();
-
+    fn new(command_rx: CommandRx, clients: Clients, filename: Option<String>) -> Controller {
         let mut samples = Vec::new();
-        for i in 0..60 {
-            let file = fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(format!(".{}.dat", i)).unwrap();
 
-            samples.push(file);
-        }
+        match filename {
+            Some(filename) => {
+                for i in 0..60 {
+                    let file = fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .truncate(true)
+                        .create(true)
+                        .open(format!(".{}.dat", i)).unwrap();
 
-        reader.deserialize().for_each(|elem| {
-            let sample: Sample = elem.unwrap();
-            for (i, &value) in sample.values.iter().enumerate() {
-                let mut network_bytes = [0u8; 4];
-                BigEndian::write_i32(&mut network_bytes, value);
-                samples[i].write_all(&network_bytes).unwrap();
-            }
-        });
+                    samples.push(file);
+                }
 
-        for mut file in &samples {
-            file.seek(SeekFrom::Start(0)).unwrap();
-        }
+                let mut reader = ReaderBuilder::new().has_headers(false).from_path(filename).unwrap();
+
+                reader.deserialize().for_each(|elem| {
+                    let sample: Sample = elem.unwrap();
+                    for (i, &value) in sample.values.iter().enumerate() {
+                        let mut network_bytes = [0u8; 4];
+                        BigEndian::write_i32(&mut network_bytes, value);
+                        samples[i].write_all(&network_bytes).unwrap();
+                    }
+                });
+
+                for mut file in &samples {
+                    file.seek(SeekFrom::Start(0)).unwrap();
+                }
+            },
+            None => {
+                for i in 0..60 {
+                    let file = fs::OpenOptions::new()
+                        .read(true)
+                        .open(format!(".{}.dat", i)).unwrap();
+
+                    samples.push(file);
+                }
+            },
+        };
 
         Controller {
             command_rx,
@@ -359,6 +373,16 @@ impl TcpServer {
 
 
 fn main() {
+    let mut args = std::env::args();
+    let mode = args.nth(1).unwrap();
+
+    let controller_input = match mode.as_str() {
+        "cached" => None,
+        "build" => Some(args.next().expect("No filename given.")),
+        _ => panic!("Invalid arguments."),
+    };
+
+
     // Create a thread handle vector on which to let main join:
     let mut threads = Vec::new();
 
@@ -384,7 +408,7 @@ fn main() {
     let tcp_server = TcpServer::bind(&tcp_addr);
     let clients = tcp_server.get_clients();
     threads.push(thread::spawn(move || {
-        let controller = Controller::new(command_rx, clients, "/home/sondre/ntnu_cyborg_server/data.csv".to_string());
+        let controller = Controller::new(command_rx, clients, controller_input);
         controller.run();
     }));
 
