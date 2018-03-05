@@ -364,9 +364,17 @@ fn main() {
             }
 
             std::process::exit(0);
+        },
+        "help" => {
+            println!(r#"Available commands:
+    build <filename>.csv - Builds the cache using the supplied CSV file and runs the server.
+    cached - Runs the server using the files built using "build <filename>.csv"
+    clear - Clears the cached files.
+    help - Shows this help information."#);
+            std::process::exit(0);
         }
         _ => {
-            eprintln!("Invalid arguments.");
+            eprintln!("Invalid arguments. Try running with help.");
             std::process::exit(1);
         },
     };
