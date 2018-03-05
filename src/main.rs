@@ -44,6 +44,9 @@ use std::time::Instant;
 use byteorder::{ByteOrder, BigEndian};
 use std::ops::DerefMut;
 use bytes::BufMut;
+use std::io::prelude::*;
+use std::io;
+use std::io::SeekFrom;
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -183,19 +186,44 @@ struct Controller {
     command_rx: CommandRx,
     clients: Clients,
     config: Option<Config>,
-    reader: Reader<fs::File>,
+    samples: Vec<fs::File>,
     last_segment_finished: Instant,
 }
 
 impl Controller {
     fn new(command_rx: CommandRx, clients: Clients, filename: String) -> Controller {
-        let reader = ReaderBuilder::new().has_headers(false).from_path(filename).unwrap();
-        let reader_pos = reader.position().clone();
+        let mut reader = ReaderBuilder::new().has_headers(false).from_path(filename).unwrap();
+
+        let mut samples = Vec::new();
+        for i in 0..60 {
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(format!(".{}.dat", i)).unwrap();
+
+            samples.push(file);
+        }
+
+        reader.deserialize().for_each(|elem| {
+            let sample: Sample = elem.unwrap();
+            for (i, &value) in sample.values.iter().enumerate() {
+                let mut network_bytes = [0u8; 4];
+                BigEndian::write_i32(&mut network_bytes, value);
+                samples[i].write_all(&network_bytes).unwrap();
+            }
+        });
+
+        for mut file in &samples {
+            file.seek(SeekFrom::Start(0)).unwrap();
+        }
+
         Controller {
             command_rx,
             clients,
             config: None,
-            reader,
+            samples,
             last_segment_finished: Instant::now(),
         }
     }
@@ -250,24 +278,14 @@ impl Controller {
             panic!("Config not set.");
         };
 
-        let result = {
-            let mut iter = self.reader.deserialize();
-            iter
-                .take(config.segment_length as usize)
-                .fold(vec![BytesMut::new(); 60], |mut res, elem| {
-                    let sample: Sample = elem.unwrap();
-                    for (i, value) in sample.values.iter().enumerate() {
-                        let mut network_bytes = [0; std::mem::size_of::<i32>()];
-                        BigEndian::write_i32(&mut network_bytes, value.clone());
-                        res[i].extend_from_slice(&network_bytes);
-                    }
-                    res
-                }).iter()
-                .fold(BytesMut::new(), |mut res, elem| {
-                    res.extend_from_slice(elem);
-                    res
-                }).freeze()
-        };
+        let mut result = BytesMut::with_capacity(config.segment_length as usize * std::mem::size_of::<i32>() * 60).writer();
+
+        for file in &self.samples {
+            let mut bytes = file.take(config.segment_length as u64 * std::mem::size_of::<i32>() as u64);
+            io::copy(&mut bytes, &mut result).unwrap();
+        }
+
+        let result = result.into_inner().freeze();
 
 
         self.last_segment_finished += Duration::from_micros((config.segment_length * 1000000 / config.sample_rate) as u64);
@@ -389,6 +407,4 @@ fn main() {
     for i in threads {
         i.join().unwrap();
     }
-
-    println!("Hmm");
 }
