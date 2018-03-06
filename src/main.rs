@@ -22,7 +22,6 @@ use hyper::server::{Http, Request, Response, Service};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
-use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, SeekFrom};
 use std::net::SocketAddr;
@@ -282,8 +281,8 @@ impl Controller {
         let mut bytes_buf_vec = vec![0u8; config.segment_length as usize * std::mem::size_of::<i32>()];
         for file in &mut self.samples {
             let mut bytes_buf = bytes_buf_vec.as_mut_slice();
-            file.read_exact(&mut bytes_buf);
-            result.write_all(&mut bytes_buf);
+            file.read_exact(&mut bytes_buf).unwrap();
+            result.write_all(&mut bytes_buf).unwrap();
         }
 
         let result = result.into_inner().freeze();
