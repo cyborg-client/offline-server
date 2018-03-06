@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::io::prelude::*;
-use std::io::SeekFrom;
+use std::io::{BufReader, SeekFrom};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -165,16 +165,18 @@ struct Controller {
     command_rx: CommandRx,
     clients: Clients,
     config: Option<Config>,
-    samples: Vec<fs::File>,
+    samples: Vec<BufReader<fs::File>>,
     last_segment_finished: Instant,
 }
 
 impl Controller {
     fn new(command_rx: CommandRx, clients: Clients, filename: Option<String>) -> Controller {
-        let mut samples = Vec::new();
+        let mut samples_reader = Vec::new();
 
         match filename {
             Some(filename) => {
+                let mut samples = Vec::new();
+
                 for i in 0..60 {
                     let file = fs::OpenOptions::new()
                         .read(true)
@@ -200,6 +202,10 @@ impl Controller {
                 for mut file in &samples {
                     file.seek(SeekFrom::Start(0)).unwrap();
                 }
+
+                for mut file in samples {
+                    samples_reader.push(BufReader::new(file));
+                }
             },
             None => {
                 for i in 0..60 {
@@ -207,7 +213,7 @@ impl Controller {
                         .read(true)
                         .open(format!(".{}.dat", i)).unwrap();
 
-                    samples.push(file);
+                    samples_reader.push(BufReader::new(file));
                 }
             },
         };
@@ -216,7 +222,7 @@ impl Controller {
             command_rx,
             clients,
             config: None,
-            samples,
+            samples: samples_reader,
             last_segment_finished: Instant::now(),
         }
     }
@@ -273,9 +279,11 @@ impl Controller {
 
         let mut result = BytesMut::with_capacity(config.segment_length as usize * std::mem::size_of::<i32>() * 60).writer();
 
-        for file in &self.samples {
-            let mut bytes = file.take(config.segment_length as u64 * std::mem::size_of::<i32>() as u64);
-            io::copy(&mut bytes, &mut result).unwrap();
+        let mut bytes_buf_vec = vec![0u8; config.segment_length as usize * std::mem::size_of::<i32>()];
+        for file in &mut self.samples {
+            let mut bytes_buf = bytes_buf_vec.as_mut_slice();
+            file.read_exact(&mut bytes_buf);
+            result.write_all(&mut bytes_buf);
         }
 
         let result = result.into_inner().freeze();
