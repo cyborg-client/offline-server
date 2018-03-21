@@ -8,7 +8,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::time::{Duration, Instant};
 use tcp::Clients;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub sample_rate: u32,
     pub segment_length: u32
@@ -141,19 +141,41 @@ impl Controller {
     }
 
     fn collect_segment(&mut self) -> Bytes {
-        let config = if let Some(ref config) = self.config {
-            config
-        } else {
-            panic!("Config not set.");
-        };
+        let config;
+        {
+            let config_clone = self.config.clone();
+            match config_clone {
+                Some(ref val) => {
+                    config = val.clone()
+                },
+                None => {
+                    panic!("Config not set.");
+                }
+            }
+        }
 
         let mut result = BytesMut::with_capacity(config.segment_length as usize * std::mem::size_of::<i32>() * 60).writer();
 
         let mut bytes_buf_vec = vec![0u8; config.segment_length as usize * std::mem::size_of::<i32>()];
+        let mut reset_files = false;
         for file in &mut self.samples {
             let mut bytes_buf = bytes_buf_vec.as_mut_slice();
-            file.read_exact(&mut bytes_buf).unwrap();
+            match file.read_exact(&mut bytes_buf) {
+                Ok(_) => {},
+                Err(_) => {
+                    reset_files = true;
+                    println!("Resetting files.");
+                    break;
+                }
+            }
             result.write_all(&mut bytes_buf).unwrap();
+        }
+
+        if reset_files {
+            for file in &mut self.samples {
+                file.seek(SeekFrom::Start(0)).unwrap();
+            }
+            return self.collect_segment();
         }
 
         let result = result.into_inner().freeze();
@@ -174,6 +196,7 @@ impl Controller {
             let mut clients = self.clients.lock().unwrap();
             for (address, tx) in clients.iter_mut() {
                 if let Err(_) = tx.try_send(segment.clone()) {
+                    println!("Killing {} because it is lagging too far behind.", address);
                     broken_clients.push(address.clone());
                 }
             }
