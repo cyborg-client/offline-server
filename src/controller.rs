@@ -83,6 +83,9 @@ impl Controller {
                 for mut file in samples {
                     samples_reader.push(BufReader::new(file));
                 }
+
+                println!("Done building cache. Run with 'run'.");
+                std::process::exit(0);
             },
             None => {
                 for i in 0..60 {
