@@ -40,7 +40,7 @@ fn main() {
         },
         "help" => {
             println!(r#"Available commands:
-    build <filename>.csv - Builds the cache using the supplied CSV file and runs the server.
+    build <filename>.csv - Builds the cache using the supplied CSV file.
     run - Runs the server using the files built using "build <filename>.csv"
     clear - Clears the cached files.
     help - Shows this help information."#);
