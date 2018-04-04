@@ -21,3 +21,6 @@ To see all available commands, run `server help`.
 ## Building and installing the server
 1. Download the toolchain by running `curl https://sh.rustup.rs -sSf | sh`.
 2. Build and install the server by running `cargo install --git https://github.com/cyborg-client/offline-server.git`. You can also use the `--root` flag to specify where to install to.
+
+## Uninstalling the server
+1. Run `cargo uninstall server`.
