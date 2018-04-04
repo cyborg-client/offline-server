@@ -10,10 +10,11 @@ To see all available commands, run `server help`.
 ## Usage
 **To build the cache from a CSV file:**
 1. Make sure that the .csv file does not contain anything other than the data. In other words no headers or column description should be present in the file.
-2. Run `server build FILENAME`. This will generate a cache of the CSV file and save it to hidden files in the current directory.
+2. Create a `config.json` file in the current directory: `echo '{"http_port": 1234, "tcp_port": 12345}' > config.json`.
+3. Run `server build FILENAME`. This will generate a cache of the CSV file and save it to hidden files in the current directory.
 
 **To run the server on the cache in the current directory:**
-1. Run `server run`.
+1. Run `server run`. Make sure that the config file exists.
 
 ## Building and installing the server
 1. Download the toolchain by running `curl https://sh.rustup.rs -sSf | sh`.

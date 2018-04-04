@@ -17,6 +17,12 @@ mod tcp;
 mod http;
 mod controller;
 
+#[derive(Deserialize)]
+struct Config {
+    http_port: u16,
+    tcp_port: u16,
+}
+
 fn main() {
     let mut args = std::env::args();
     let mode = args.nth(1).unwrap();
@@ -46,18 +52,22 @@ fn main() {
     };
 
 
+    // Get the ports from the config file:
+    let config_file = fs::File::open("config.json").expect("Could not open config.json");
+    let config: Config = serde_json::from_reader(config_file).expect("The config is missing one or more element.");
+
     // Create a thread handle vector on which to let main join:
     let mut threads = Vec::new();
 
     // Create channels for communication between HTTP server and MEA read thread:
     let (command_tx, command_rx) = std::sync::mpsc::channel();
 
-    let http_addr = "0.0.0.0:1234".parse().unwrap();
+    let http_addr = (String::from("0.0.0.0:") + &config.http_port.to_string()).parse().unwrap();
     threads.push(thread::spawn(move || {
         http::Server::new().run(&http_addr, command_tx);
     }));
 
-    let tcp_addr = "0.0.0.0:12345".parse().unwrap();
+    let tcp_addr = (String::from("0.0.0.0:") + &config.http_port.to_string()).parse().unwrap();
     let tcp_server = tcp::Server::bind(&tcp_addr);
     let clients = tcp_server.get_clients();
 
