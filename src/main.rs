@@ -67,7 +67,7 @@ fn main() {
         http::Server::new().run(&http_addr, command_tx);
     }));
 
-    let tcp_addr = (String::from("0.0.0.0:") + &config.http_port.to_string()).parse().unwrap();
+    let tcp_addr = (String::from("0.0.0.0:") + &config.tcp_port.to_string()).parse().unwrap();
     let tcp_server = tcp::Server::bind(&tcp_addr);
     let clients = tcp_server.get_clients();
 
