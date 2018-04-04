@@ -1,4 +1,3 @@
-#![feature(duration_from_micros)]
 extern crate byteorder;
 extern crate bytes;
 extern crate csv;

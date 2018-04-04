@@ -8,6 +8,13 @@ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::time::{Duration, Instant};
 use tcp::Clients;
 
+fn duration_from_micros(micros: u64) -> Duration {
+    Duration::new(
+        micros / 1_000_000,
+        ((micros % 1_000_000) as u32) * 1_000,
+    )
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub sample_rate: u32,
@@ -181,7 +188,7 @@ impl Controller {
         let result = result.into_inner().freeze();
 
 
-        self.last_segment_finished += Duration::from_micros((config.segment_length * 1000000 / config.sample_rate) as u64);
+        self.last_segment_finished += duration_from_micros((config.segment_length * 1000000 / config.sample_rate) as u64);
         self.sleep_until(self.last_segment_finished);
         result
     }

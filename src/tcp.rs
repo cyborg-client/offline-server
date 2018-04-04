@@ -30,7 +30,7 @@ impl Server {
     pub fn run(self) {
         let clients = self.clients.clone();
         let server = self.listener.incoming().for_each(move |stream| {
-            let (tx, rx) = ::futures::sync::mpsc::channel(100000);
+            let (tx, rx) = ::futures::sync::mpsc::channel(10000000);
 
             {
                 clients.lock().unwrap().insert(stream.peer_addr().unwrap(), tx);
