@@ -115,6 +115,11 @@ impl Service for HttpService {
                     }
                 }))
             },
+            ("/stimulate", &Method::Post) => {
+                Box::new(req.body().skip_while(|_| ok(true)).concat2().and_then(move |_| {
+                    ok(Response::new())
+                }))
+            },
             _ => {
                 Box::new(ok(Response::new().with_status(StatusCode::NotFound)))
             }
