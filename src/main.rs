@@ -54,7 +54,7 @@ fn main() {
         },
     };
 
-    if run == false {
+    if !run {
         std::process::exit(0);
     }
 
