@@ -30,15 +30,18 @@ fn main() {
     let mode = args.nth(1).unwrap();
 
     let mut controller_input = None;
+    let mut run = true;
     match mode.as_str() {
         "run" => controller_input = None,
         "build" => controller_input = Some(args.next().expect("No filename given.")),
         "clear" => {
+            run = false;
             for i in 0..60 {
                 let _ = fs::remove_file(format!(".{}.dat", i));
             }
         },
         "help" => {
+            run = false;
             println!(r#"Available commands:
     build <filename>.csv - Builds the cache using the supplied CSV file.
     run - Runs the server using the files built using "build <filename>.csv"
@@ -51,8 +54,7 @@ fn main() {
         },
     };
 
-    // If the controller hasn't gotten any input, quit:
-    if controller_input == None {
+    if run == false {
         std::process::exit(0);
     }
 
