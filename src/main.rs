@@ -22,7 +22,7 @@ fn main() {
     let mode = args.nth(1).unwrap();
 
     let controller_input = match mode.as_str() {
-        "cached" => None,
+        "run" => None,
         "build" => Some(args.next().expect("No filename given.")),
         "clear" => {
             for i in 0..60 {
@@ -34,7 +34,7 @@ fn main() {
         "help" => {
             println!(r#"Available commands:
     build <filename>.csv - Builds the cache using the supplied CSV file and runs the server.
-    cached - Runs the server using the files built using "build <filename>.csv"
+    run - Runs the server using the files built using "build <filename>.csv"
     clear - Clears the cached files.
     help - Shows this help information."#);
             std::process::exit(0);

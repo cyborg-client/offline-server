@@ -13,10 +13,7 @@ To see all available commands, run `server help`.
 2. Run `server build FILENAME`. This will generate a cache of the CSV file and save it to hidden files in the current directory.
 
 **To run the server on the cache in the current directory:**
-1. Run `server cached`.
-
-**To build the cache and run the server immediately after the cache is built:**
-1. Run `server run FILENAME`.
+1. Run `server run`.
 
 ## Building and installing the server
 1. Download the toolchain by running `curl https://sh.rustup.rs -sSf | sh`.
