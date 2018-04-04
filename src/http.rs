@@ -1,3 +1,5 @@
+//! Manages the HTTP server and handles HTTP connections.
+
 use controller::{Command, CommandTx, Config, Running};
 use futures::{Future, Stream};
 use futures::future::{Either, ok};
@@ -9,6 +11,7 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::rc::Rc;
 
+// Create a Server object that can be started from main:
 pub struct Server {}
 
 impl Server
@@ -18,6 +21,7 @@ impl Server
     }
 
     pub fn run(self, addr: &SocketAddr, command_tx: CommandTx) {
+        // The running variable states whether or not the server as a whole is in the running state or not.
         let running = Rc::new(Cell::new(false));
         let command_tx = Rc::new(command_tx);
         let listener = Http::new().bind(addr, move || Ok(HttpService { running: running.clone(), command_tx: command_tx.clone() })).unwrap();
@@ -25,6 +29,7 @@ impl Server
     }
 }
 
+// Create the HttpService that will be run for each HTTP request:
 struct HttpService {
     running: Rc<Cell<Running>>,
     command_tx: Rc<CommandTx>,
@@ -34,6 +39,7 @@ impl Service for HttpService {
     type Request = Request;
     type Response = Response;
     type Error = ::hyper::Error;
+    // Let the service return a future of a response since we might not have a reply ready right away:
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
@@ -47,6 +53,7 @@ impl Service for HttpService {
                 let running = self.running.clone();
                 let command_tx = self.command_tx.clone();
                 Box::new(req.body().concat2().and_then(move |b| {
+                    // Try to read the POST data as a Config struct:
                     let config: Config = if let Ok(n) = ::serde_json::from_slice(b.as_ref()) {
                         n
                     } else {

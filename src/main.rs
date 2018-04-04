@@ -10,20 +10,23 @@ extern crate serde_json;
 extern crate tokio;
 extern crate tokio_io;
 
-mod tcp; // Manages the TCP server.
-mod http; // Manages the HTTP server and handles HTTP connections.
-mod controller; // Pipes data from the CSV file to the TCP clients.
+mod tcp;
+mod http;
+mod controller;
 
 use std::{fs, thread};
 use controller::Controller;
 
-// Struct to represent the config.json-file.
+/// Struct to represent the config.json-file.
 #[derive(Deserialize)]
 struct Config {
+    /// What port the HTTP server should be listening on.
     http_port: u16,
+    /// What port the TCP server should be listening on.
     tcp_port: u16,
 }
 
+/// Starts the different threads.
 fn main() {
     // Parse the input arguments:
     let mut args = std::env::args();

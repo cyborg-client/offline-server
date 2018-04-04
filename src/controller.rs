@@ -1,3 +1,5 @@
+//! Pipes data from the CSV file to the TCP clients.
+
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, Bytes, BytesMut};
 use csv::ReaderBuilder;
@@ -8,6 +10,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::time::{Duration, Instant};
 use tcp::Clients;
 
+/// Creates a Duration object from microseconds.
 fn duration_from_micros(micros: u64) -> Duration {
     Duration::new(
         micros / 1_000_000,
@@ -15,26 +18,42 @@ fn duration_from_micros(micros: u64) -> Duration {
     )
 }
 
+/// Represents the server state and is configured using the POST /start.
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
+    /// The sample rate when sampling the MEA.
     pub sample_rate: u32,
+    /// The number of samples to send for each channel each time.
     pub segment_length: u32
 }
 
+/// Represents a running state.
 pub type Running = bool;
 
+/// The command to send on the Command channel.
 pub enum Command {
+    /// Start the server with the specified Config.
     Start(Config),
+    /// Stop the server.
     Stop
 }
 
+/// The type for the sending side of the Command channel.
+///
+/// This channel sends a tuple containing the Command and a oneshot channel for acknowledging the command.
 pub type CommandTx = std::sync::mpsc::Sender<(Command, oneshot::Sender<()>)>;
+/// The type for the receiving side of the Command channel.
+///
+/// This channel receives a tuple containing the Command and a oneshot channel for acknowledging the command.
 pub type CommandRx = std::sync::mpsc::Receiver<(Command, oneshot::Sender<()>)>;
 
+/// Represents a single line in the CSV file.
 #[derive(Deserialize)]
 struct Sample {
+    /// The timestamp value.
     #[allow(unused)]
     timestamp: u64,
+    /// The 60 voltage values.
     values: Vec<i32>,
 }
 

@@ -1,3 +1,5 @@
+//! Manages the TCP server.
+
 use bytes::Bytes;
 use futures::{Future, Stream};
 use std::collections::HashMap;
