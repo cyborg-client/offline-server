@@ -22,3 +22,9 @@ To see all available commands, run `server help`.
 
 ## Uninstalling the server
 1. Run `cargo uninstall server`.
+
+## Continuing development
+To continue development on the server, clone the repository. These are the commands you need to know:
+ * Build docs: `cargo rustdoc -- --document-private-items`
+ * Run the server with debug flags: `run -- [command parameters here]`, ex. `run -- build data.csv`
+ * Run the server with release flags: `run --release -- [command parameters here]` 
