@@ -1,4 +1,10 @@
-//! Pipes data from the CSV file to the TCP clients.
+//! This module is the controller of the system. It receives start and stop commands from the HTTP module (when the HTTP module receives start and stop requests). When the server is started, it will read segments from the offline file and send them to each of the connected TCP client managers.
+//!
+//! The system as a whole is built around using futures in a green threaded event driven environment using Tokio.
+//!
+//! When the controller is created it checks whether it should create a cache or not. If it should create the cache it loops through the CSV file and writes the values out in network order into 60 files, one file for each channel. In other words, the cache files are files that contain the data to be sent directly on the network for each channel.
+//!
+//! When the controller is run it runs a loop that does the following. First it checks for config updates (from the HTTP server). If the server was not running it will sleep until started. Then it proceeds to collect a segment according to the configuration parameters for the server. Lastly it tries to send the segment to all TCP client managers with their TX. It records which TXes fail at sending. This may be because the client has disconnected so the RX side does not exist anymore, or it may be because the channel is full because of backpressure. In either case these clients are dropped. If there is a corresponding RX side, this will fail closing the TCP connection cleanly.
 
 use byteorder::{BigEndian, ByteOrder};
 use bytes::{BufMut, Bytes, BytesMut};
@@ -57,14 +63,21 @@ struct Sample {
     values: Vec<i32>,
 }
 
+/// The controller data struct.
 pub struct Controller {
+    /// Receives commands from the HTTP module.
     command_rx: CommandRx,
+    /// List of TCP clients to send CSV data to.
     clients: ::tcp::Clients,
+    /// The global server config.
     config: Option<Config>,
+    /// A vector containing a buffered file reader (performance) for each channel.
     samples: Vec<BufReader<fs::File>>,
+    /// Keep track of when the last segment was sent so we know when to send the next one.
     last_segment_finished: Instant,
 }
 
+/// The controller creates a cache, receives commands from the HTTP module, and sends data from the cache to the TCP clients.
 impl Controller {
     pub fn new(command_rx: CommandRx, clients: Clients, filename: Option<String>) -> Controller {
         let mut samples_reader = Vec::new();
@@ -126,6 +139,9 @@ impl Controller {
         }
     }
 
+    /// Update the global config into the local config variable.
+    ///
+    /// This will block if the server is stopped, else it will not block.
     fn update_config(&mut self) {
         loop {
             let (mut command, mut reply_tx) = (None, None);
@@ -162,6 +178,7 @@ impl Controller {
         }
     }
 
+    /// Simple implementation of a sleep until function.
     fn sleep_until(&self, instant: Instant) {
         let now = Instant::now();
         if instant > now {
@@ -169,6 +186,9 @@ impl Controller {
         }
     }
 
+    /// Collect a segment from the cache.
+    ///
+    /// If the cache is completely consumed, start over at the top of the cache files.
     fn collect_segment(&mut self) -> Bytes {
         let config;
         {
@@ -215,6 +235,9 @@ impl Controller {
         result
     }
 
+    /// Run the controller loop.
+    ///
+    /// This will kick any clients who are not receiving fast enough.
     pub fn run(mut self) {
         loop {
             self.update_config();

@@ -1,4 +1,8 @@
-//! Manages the HTTP server and handles HTTP connections.
+//! This module sets up a HTTP server accepting incoming requests. A client may send a POST request to start and stop the server using specified parameters.
+//!
+//! The HTTP module is responsible for serving all HTTP requests. For each incoming request, the call function for the Service trait is called. The input parameter for this function is a request object containing all the information about the request. The function matches the path and HTTP method to branch out and process each request. The returned value is a boxed Future containing a response. This means that the response value can be resolved at once using the ok-future, or at a later time using a future. For the /start URI the server checks that the server is not already started. If it is, it returns an error immediately. In order to return both ok(error) and a future success, the function returns Either::A or Either::B.
+//!
+//! When a request to start or stop the server is received, and the server is in the correct state, the command is forwarded to the controller using the CommandTx channel along with a oneshot channel for receiving an ACK from the controller. When the controller is has ACKed, the HTTP server will send a successful response to the HTTP client.
 
 use controller::{Command, CommandTx, Config, Running};
 use futures::{Future, Stream};
@@ -11,15 +15,17 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::rc::Rc;
 
-// Create a Server object that can be started from main:
+/// Create an object that can be called from main.
 pub struct Server {}
 
 impl Server
 {
+    /// Create a new server.
     pub fn new() -> Server {
         Server {}
     }
 
+    /// Run the server.
     pub fn run(self, addr: &SocketAddr, command_tx: CommandTx) {
         // The running variable states whether or not the server as a whole is in the running state or not.
         let running = Rc::new(Cell::new(false));
@@ -29,7 +35,7 @@ impl Server
     }
 }
 
-// Create the HttpService that will be run for each HTTP request:
+/// Create the HttpService that will be created for each HTTP request:
 struct HttpService {
     running: Rc<Cell<Running>>,
     command_tx: Rc<CommandTx>,
@@ -39,9 +45,10 @@ impl Service for HttpService {
     type Request = Request;
     type Response = Response;
     type Error = ::hyper::Error;
-    // Let the service return a future of a response since we might not have a reply ready right away:
+    /// Let the service return a future of a response since we might not have a reply ready right away:
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
 
+    /// Parse the request and generate a response.
     fn call(&self, req: Self::Request) -> Self::Future {
         match (req.path(), req.method()) {
             ("/", &Method::Get) => {
