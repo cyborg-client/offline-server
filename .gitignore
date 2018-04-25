@@ -1,8 +1,7 @@
 CMakeLists.txt
 .*.dat
 *.csv
-/target/debug
-/target/release
+/target/
 **/*.rs.bk
 *.lock
 cmake-build*/
