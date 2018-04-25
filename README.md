@@ -1,5 +1,7 @@
 # Offline server
 
+Docs are available at [https://cyborg-client.github.io/offline-server](https://cyborg-client.github.io/offline-server).
+
 ## Introduction
 This is an offline variant of the MEA server that allows you to use a CSV file as input. This server is in its alpha stage, and is therefore picky about the format of the CSV file. When the CSV file is exhausted, it starts over from the beginning.
 
