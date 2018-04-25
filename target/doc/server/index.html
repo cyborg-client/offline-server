@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="rustdoc">
+    <meta name="description" content="API documentation for the Rust `server` crate.">
+    <meta name="keywords" content="rust, rustlang, rust-lang, server">
+
+    <title>server - Rust</title>
+
+    <link rel="stylesheet" type="text/css" href="../normalize.css">
+    <link rel="stylesheet" type="text/css" href="../rustdoc.css" id="mainThemeStyle">
+    
+    <link rel="stylesheet" type="text/css" href="../dark.css">
+    <link rel="stylesheet" type="text/css" href="../main.css" id="themeStyle">
+    <script src="../storage.js"></script>
+    
+
+    
+    
+</head>
+<body class="rustdoc mod">
+    <!--[if lte IE 8]>
+    <div class="warning">
+        This old browser is unsupported and will most likely display funky
+        things.
+    </div>
+    <![endif]-->
+
+    
+
+    <nav class="sidebar">
+        <div class="sidebar-menu">&#9776;</div>
+        
+        <p class='location'>Crate server</p><div class="sidebar-elems"><div class="block items"><ul><li><a href="#reexports">Re-exports</a></li><li><a href="#modules">Modules</a></li><li><a href="#structs">Structs</a></li><li><a href="#constants">Constants</a></li><li><a href="#functions">Functions</a></li></ul></div><p class='location'></p><script>window.sidebarCurrent = {name: 'server', ty: 'mod', relpath: '../'};</script></div>
+    </nav>
+
+    <div class="theme-picker">
+        <button id="theme-picker" aria-label="Pick another theme!">
+            <img src="../brush.svg" width="18" alt="Pick another theme!">
+        </button>
+        <div id="theme-choices"></div>
+    </div>
+    <script src="../theme.js"></script>
+    <nav class="sub">
+        <form class="search-form js-only">
+            <div class="search-container">
+                <input class="search-input" name="search"
+                       autocomplete="off"
+                       placeholder="Click or press ‘S’ to search, ‘?’ for more options…"
+                       type="search">
+            </div>
+        </form>
+    </nav>
+
+    <section id='main' class="content">
+<h1 class='fqn'><span class='in-band'>Crate <a class="mod" href=''>server</a></span><span class='out-of-band'><span id='render-detail'>
+                   <a id="toggle-all-docs" href="javascript:void(0)" title="collapse all docs">
+                       [<span class='inner'>&#x2212;</span>]
+                   </a>
+               </span><a class='srclink' href='../src/server/main.rs.html#1-147' title='goto source code'>[src]</a></span></h1>
+<div class='docblock'><h1 id="offline-mea-server" class="section-header"><a href="#offline-mea-server">Offline MEA Server</a></h1>
+<p>The offline server implements the same API as the MEA server, however instead of getting its data from the MEA it gets its data from an offline CSV file. This means it can be used instead of the MEA server when the MEA server is not available (e.g. poor network connection at conferences or that the MEA is not connected to the server).
+The server is written in Rust. To follow some of the more technical aspects of the discussion below, it is recommended to have an idea of what the Rust ownership system is. The following discussion is a bit simplified to be easy to follow for people who have not written specifically in Rust.</p>
+<h2 id="overview-over-memory-management" class="section-header"><a href="#overview-over-memory-management">Overview over memory management</a></h2>
+<p>We now turn to the memory management problem of the server. The server listens to HTTP connections for configuring the server state. The state is whether the server is running, the segment length and the sample rate of transmission. When the server is running, it is accepting TCP connections. When a client connects it will start receiving data. The first byte it receives will be from a segment boundary. This means that if the server is currently recording in the middle of a segment, the server will wait until a new segment boundary is started before sending data to this new client.</p>
+<p>Since the TCP data is streamed over the internet, there might be temporary disruptions in the connection and other issues that cause the OS's TCP sending buffer to fill completely. To stop this from disconnecting clients as soon as this happens, we want to buffer the MEA data for as long as needed (up to a certain threshold where the client is kicked for being too slow at receiving). When all the connected clients have received a given segment it should go out of scope to free the memory.</p>
+<p>To achieve this, we have created a queue of segments for each TCP client. Since we do not know at compile time which clients will connect, we cannot prove who will get a reader reference, so we will not know when there are zero references to the data, and the compiler cannot infer when to delete the data. To allow for having multiple readers created on runtime, we can use a reference counted wrapper for the segment data. This counts all the created references on runtime, and decreases the counter when a reference goes out of scope. This upholds the invariants demanded by the ownership system on runtime. This means there will be a small but necessary runtime penalty for doing this.</p>
+<p>At last we can describe how the memory of the segments are managed. In short a controller module generates segments which are wrapped in reference counted objects. Each of these segments are then sent on a bounded buffered channel to each TCP client manager. If the bounded buffer is full the TCP connection will be closed. In other words if the TCP backpressure gets too large, we terminate the connection. Each TCP client manager reads from the channel, sends the segments onto the network. Since each segment is sent as a whole to each TCP client manager we ensure that each TCP client receives data from a segment boundary. When the data is sent on the network the segment goes out of scope. When all TCP client managers have sent the data and let the segment reference go out of scope, there are zero references to the segment, and it is then deleted by the ownership system. If a channel gets full the TCP connection is closed, and the buffer is deleted. This means all the contained segment references go out of scope, and finally the segments are deleted. In other words all segments are stored for as long as needed, and deleted as soon as possible keeping the memory footprint as low as possible.</p>
+<h2 id="architecture-and-language-for-offline-mea-server" class="section-header"><a href="#architecture-and-language-for-offline-mea-server">Architecture and language for Offline MEA Server</a></h2><h3 id="why-rust" class="section-header"><a href="#why-rust">Why Rust?</a></h3>
+<p>We decided to use Rust for our server because it runs as fast as highly optimized C++ code. In addition it only accepts safe code so that we were much less likely to encounter runtime bugs. This was an important trait for this project as we did not have much time to do runtime debugging. Instead we could rely on Rust's safe type system to eliminate most of the bugs. This means that when the program compiles and runs without a bug once, it will likely run without any bugs for a long time.</p>
+<p>Considering the above one might wonder why we used Rust only for the server, and not for the client program. One important reason is that in order for Rust to accomplish its speed and safety it enforces a strict type system that takes some time to learn. If the code cannot be proved by the compiler to be safe, it will not compile. This makes it unsuitable for use by people who do not already know Rust or are not experienced C++ programmers (or experienced in any other language that supports raw pointers). Since only one person was already fluent in Rust, he was assigned the responsibility of the offline MEA server.</p>
+<h3 id="architectural-choices" class="section-header"><a href="#architectural-choices">Architectural choices</a></h3><h4 id="the-segment-memory-management-structure" class="section-header"><a href="#the-segment-memory-management-structure">The segment memory management structure</a></h4>
+<p>We chose the memory management technique described because it is a very easy solution to the problem. However it also means that each segment gets its own object on the heap. This is fairly expensive because the segments will not be located in the CPU Lx-caches, resulting in an allocation and usage cost of about 200 times longer than if we had used pre-allocated segments. This solution is something to look into if the server is to be run on cheap hardware.</p>
+<h4 id="the-cache" class="section-header"><a href="#the-cache">The cache</a></h4>
+<p>When developing the program, we simply chose the first CSV library we found on crates.io. We have not had time to compare it to other libraries, so we do not know whether or not it is poorly implemented or not. However after running a quick profile of the program, close to 99 % of the CPU time was spent in the CSV library. To decrease the CPU usage, we implemented a cache instead of reading from the CSV file directly. This was necessary because the server couldn't run in real-time on a laptop. If we would have had more time available we would try different CSV libraries as an alternative to using cache files. This is because using a cache makes the system more complicated than necessary.</p>
+<h4 id="the-green-thread-model" class="section-header"><a href="#the-green-thread-model">The green thread model</a></h4>
+<p>We chose to use Tokio with a green threading model mainly because Hyper (HTTP library) is built on top of Tokio. This means if we were to use Hyper, we would need to use Tokio as well. Using Tokio means the server will be able to scale from one to millions of clients with little change in needed CPU power. This is because in a server where all network connections are handled in its own thread spends most of its time switching OS threads. However since we are only going to have a few clients, using a green thread model is a bit overkill if there were no other reasons to use Tokio.</p>
+<p>One advantage of using Tokio is that each process can be represented by functional programming. This is a very efficient approach to implementing client-server functionality. This means we could pipe data with very little effort. The main disadvantage of using Tokio and futures in Rust is that the syntax is still in its infancy. There is a crate adding macros for using async/await syntax, however since this is still experimental, we decided not to use this. In the future we would have used an async/await syntax to make the code much easier to read.</p>
+<h2 id="overview-over-main" class="section-header"><a href="#overview-over-main">Overview over main</a></h2>
+<p>This module parses command parameters and the config file, and starts all the other modules in their own threads. Finally it joins on all the threads in order to keep the program alive until all modules have stopped. Currently stopping functionality is not implemented. Instead you just kill the program using any code as there is no cleanup to be done.</p>
+<h3 id="more-detailed-overview" class="section-header"><a href="#more-detailed-overview">More detailed overview</a></h3>
+<p>The main module reads the command parameters and the config parameters. To set up the server it creates a vector that will contain all threads the main thread should join. Main then starts the HTTP server in a new thread by calling http::Server::new().run(&amp;Addr, CommandTx). It then proceeds to start the TCP server in a similar way. It then extracts a reference to the TCP clients list from the TCP server object. Lastly the Controller is started in a separate thread, and is initialized with the CommandRx and Clients list. In addition it is passed either None or Some(filename). If Some(filename) is specified, the controller will generate a cache from the specified CSV file. If None is specified, the controller will run on the cache.</p>
+</div><h2 id='reexports' class='section-header'><a href="#reexports">Re-exports</a></h2>
+<table><tr><td><code>extern crate <a class="mod" href="https://doc.rust-lang.org/nightly/std/index.html" title="mod std">std</a> as std;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/byteorder/1.2.1/byteorder/index.html" title="mod byteorder">byteorder</a>;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/bytes/0.4.6/bytes/index.html" title="mod bytes">bytes</a>;</code></td></tr><tr><td><code>extern crate csv;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/futures/0.1/futures/index.html" title="mod futures">futures</a>;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/hyper/0.11.24/hyper/index.html" title="mod hyper">hyper</a>;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/serde/1.0.37/serde/index.html" title="mod serde">serde</a>;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/serde_derive/1.0.37/serde_derive/index.html" title="mod serde_derive">serde_derive</a>;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/serde_json/1.0.13/serde_json/index.html" title="mod serde_json">serde_json</a>;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/tokio/0.1.5/tokio/index.html" title="mod tokio">tokio</a>;</code></td></tr><tr><td><code>extern crate <a class="mod" href="https://docs.rs/tokio-io/0.1.6/tokio_io/index.html" title="mod tokio_io">tokio_io</a>;</code></td></tr><tr><td><code>use std::prelude::v1::*;</code></td></tr><tr><td><code>use std::<a class="mod" href="https://doc.rust-lang.org/nightly/std/fs/index.html" title="mod std::fs">fs</a>;</code></td></tr><tr><td><code>use std::<a class="mod" href="https://doc.rust-lang.org/nightly/std/thread/index.html" title="mod std::thread">thread</a>;</code></td></tr><tr><td><code>use controller::<a class="struct" href="../server/controller/struct.Controller.html" title="struct server::controller::Controller">Controller</a>;</code></td></tr></table><h2 id='modules' class='section-header'><a href="#modules">Modules</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="mod" href="controller/index.html"
+                                  title='mod server::controller'>controller</a></td>
+                           <td class='docblock-short'>
+                                <p>This module is the controller of the system. It receives start and stop commands from the HTTP module (when the HTTP module receives start and stop requests). When the server is started, it will read segments from the offline file and send them to each of the connected TCP client managers.</p>
+
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="mod" href="http/index.html"
+                                  title='mod server::http'>http</a></td>
+                           <td class='docblock-short'>
+                                <p>This module sets up a HTTP server accepting incoming requests. A client may send a POST request to start and stop the server using specified parameters.</p>
+
+                           </td>
+                       </tr>
+                       <tr class=' module-item'>
+                           <td><a class="mod" href="tcp/index.html"
+                                  title='mod server::tcp'>tcp</a></td>
+                           <td class='docblock-short'>
+                                <p>This module sets up a TCP server. When a client is connected it will receive segments when the server is running. When a HTTP stop request is received, all TCP clients are kicked. Each TCP client connection gets its own TCP client manager that sends segments to the clients.</p>
+
+                           </td>
+                       </tr></table><h2 id='structs' class='section-header'><a href="#structs">Structs</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="struct" href="struct.Config.html"
+                                  title='struct server::Config'>Config</a></td>
+                           <td class='docblock-short'>
+                                <p>Struct to represent the config.json-file.</p>
+
+                           </td>
+                       </tr></table><h2 id='constants' class='section-header'><a href="#constants">Constants</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="constant" href="constant._IMPL_DESERIALIZE_FOR_Config.html"
+                                  title='constant server::_IMPL_DESERIALIZE_FOR_Config'>_IMPL_DESERIALIZE_FOR_Config</a></td>
+                           <td class='docblock-short'>
+                                
+                           </td>
+                       </tr></table><h2 id='functions' class='section-header'><a href="#functions">Functions</a></h2>
+<table>
+                       <tr class=' module-item'>
+                           <td><a class="fn" href="fn.main.html"
+                                  title='fn server::main'>main</a></td>
+                           <td class='docblock-short'>
+                                <p>Starts the different threads.</p>
+
+                           </td>
+                       </tr></table></section>
+    <section id='search' class="content hidden"></section>
+
+    <section class="footer"></section>
+
+    <aside id="help" class="hidden">
+        <div>
+            <h1 class="hidden">Help</h1>
+
+            <div class="shortcuts">
+                <h2>Keyboard Shortcuts</h2>
+
+                <dl>
+                    <dt><kbd>?</kbd></dt>
+                    <dd>Show this help dialog</dd>
+                    <dt><kbd>S</kbd></dt>
+                    <dd>Focus the search field</dd>
+                    <dt><kbd>↑</kbd></dt>
+                    <dd>Move up in search results</dd>
+                    <dt><kbd>↓</kbd></dt>
+                    <dd>Move down in search results</dd>
+                    <dt><kbd>↹</kbd></dt>
+                    <dd>Switch tab</dd>
+                    <dt><kbd>&#9166;</kbd></dt>
+                    <dd>Go to active search result</dd>
+                    <dt><kbd>+</kbd></dt>
+                    <dd>Expand all sections</dd>
+                    <dt><kbd>-</kbd></dt>
+                    <dd>Collapse all sections</dd>
+                </dl>
+            </div>
+
+            <div class="infos">
+                <h2>Search Tricks</h2>
+
+                <p>
+                    Prefix searches with a type followed by a colon (e.g.
+                    <code>fn:</code>) to restrict the search to a given type.
+                </p>
+
+                <p>
+                    Accepted types are: <code>fn</code>, <code>mod</code>,
+                    <code>struct</code>, <code>enum</code>,
+                    <code>trait</code>, <code>type</code>, <code>macro</code>,
+                    and <code>const</code>.
+                </p>
+
+                <p>
+                    Search functions by type signature (e.g.
+                    <code>vec -> usize</code> or <code>* -> vec</code>)
+                </p>
+            </div>
+        </div>
+    </aside>
+
+    
+
+    <script>
+        window.rootPath = "../";
+        window.currentCrate = "server";
+    </script>
+    <script src="../main.js"></script>
+    <script defer src="../search-index.js"></script>
+</body>
+</html>

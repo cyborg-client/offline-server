@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["Server","Represents the state of the server."]],"type":[["ClientTx","The type for transmitting data to a TCP client."],["Clients","Represents a HashMap of Clients. It will have their addresses and their transmit side of the channel."]]});
